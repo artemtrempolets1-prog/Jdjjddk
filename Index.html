@@ -1,0 +1,389 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Draw Joust Arena 2.0</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#111a2d;color:#f4f7ff;font:16px system-ui;text-align:center}
+header{padding:15px 10px 8px}
+h2{color:#78f5bd;margin:0}
+p{margin:6px;font-size:13px;color:#c3cee2}
+.panel{display:flex;gap:8px;justify-content:center;align-items:center;flex-wrap:wrap;padding:10px}
+button,select{background:#263651;color:white;border:1px solid #49617f;border-radius:10px;padding:11px 13px;font-size:14px;font-weight:700}
+button:active{transform:scale(.97)}
+.primary{background:#68e8b0;color:#102238;border:0}
+#game{display:block;width:100%;max-width:900px;height:auto;margin:auto;touch-action:none}
+#status{min-height:25px;color:#8ff3c6;font-weight:bold;padding:5px}
+.stat{background:#202d46;border-radius:10px;padding:8px 12px;font-size:13px}
+#shop{max-width:850px;margin:auto;padding:8px}
+.shopgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.shopitem{background:#1c2941;border:1px solid #354966;border-radius:12px;padding:12px}
+.shopitem p{min-height:30px}
+small{color:#a9bad3}
+</style>
+</head>
+<body>
+<header>
+<h2>DRAW JOUST ARENA 2.0</h2>
+<p>Рисуй машину. Собирай монеты. Улучшай оружие и побеждай!</p>
+</header>
+
+<div class="panel">
+ <span class="stat">🪙 <b id="coins">0</b></span>
+ <span class="stat">🏆 Уровень <b id="level">1</b></span>
+ <span class="stat">⚙️ Прочность <b id="durability">100</b></span>
+</div>
+
+<canvas id="game" width="800" height="470"></canvas>
+
+<div class="panel">
+ <button id="clear">Очистить рисунок</button>
+ <select id="weapon" aria-label="Тип оружия">
+  <option value="spear">🗡 Копьё</option>
+  <option value="hammer">🔨 Молот</option>
+  <option value="blade">⚔ Клинок</option>
+ </select>
+ <button id="fight" class="primary">⚔ Начать бой</button>
+ <button id="reset">↻ Новая машина</button>
+</div>
+
+<div id="status">Нарисуй конструкцию слева. Колёса добавляются автоматически.</div>
+<div class="panel" id="drive" style="display:none">
+ <button id="left">◀ Ехать влево</button>
+ <button id="right">Ехать вправо ▶</button>
+</div>
+
+<section id="shop">
+<h3>🔧 Мастерская</h3>
+<p>Покупай улучшения за монеты. Прогресс сохраняется на устройстве.</p>
+<div class="shopgrid">
+ <div class="shopitem">
+  <b>🛞 Двигатель</b>
+  <p>Увеличивает скорость движения.</p>
+  <button data-upgrade="engine">Улучшить · <span id="engineCost">15</span> 🪙</button>
+  <small>Уровень <span id="engineLv">0</span></small>
+ </div>
+ <div class="shopitem">
+  <b>🛡 Броня</b>
+  <p>Повышает прочность машины.</p>
+  <button data-upgrade="armor">Улучшить · <span id="armorCost">20</span> 🪙</button>
+  <small>Уровень <span id="armorLv">0</span></small>
+ </div>
+ <div class="shopitem">
+  <b>⚔ Оружие</b>
+  <p>Увеличивает урон при столкновении.</p>
+  <button data-upgrade="damage">Улучшить · <span id="damageCost">25</span> 🪙</button>
+  <small>Уровень <span id="damageLv">0</span></small>
+ </div>
+ <div class="shopitem">
+  <b>🛞 Колёса</b>
+  <p>Улучшают сцепление и устойчивость.</p>
+  <button data-upgrade="wheels">Улучшить · <span id="wheelsCost">20</span> 🪙</button>
+  <small>Уровень <span id="wheelsLv">0</span></small>
+ </div>
+</div>
+</section>
+
+<script>
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+const GROUND=365;
+const SAVE='drawJoustArenaSave2';
+
+function load(){
+ try{
+  return Object.assign({
+   coins:0,level:1,
+   engine:0,armor:0,damage:0,wheels:0,
+   weapon:'spear'
+  },JSON.parse(localStorage.getItem(SAVE)||'{}'));
+ }catch(e){
+  return {coins:0,level:1,engine:0,armor:0,damage:0,wheels:0,weapon:'spear'};
+ }
+}
+let data=load();
+let strokes=[],current=[],drawing=false;
+let battle=false,ended=false,keys={};
+let player,enemy,last=0,rotation=0;
+const W=800,H=470;
+
+function save(){
+ try{localStorage.setItem(SAVE,JSON.stringify(data))}catch(e){}
+ updateUI();
+}
+function updateUI(){
+ $('coins').textContent=data.coins;
+ $('level').textContent=data.level;
+ for(const k of ['engine','armor','damage','wheels']){
+  $(k+'Lv').textContent=data[k];
+  const base={engine:15,armor:20,damage:25,wheels:20}[k];
+  $(k+'Cost').textContent=base*(data[k]+1);
+ }
+ $('durability').textContent=player?Math.ceil(player.hp):100;
+ $('weapon').value=data.weapon;
+}
+function newMachine(){
+ strokes=[];current=[];battle=false;ended=false;
+ player=makeUnit(205,GROUND-48,true);
+ enemy=makeUnit(610,GROUND-48,false);
+ $('drive').style.display='none';
+ $('status').textContent='Нарисуй корпус и оружие слева от центра арены.';
+ render();
+}
+function makeUnit(x,y,hero){
+ return {
+  x,y,vx:0,vy:0,angle:0,spin:0,
+  hp:100+data.armor*25,
+  maxhp:100+data.armor*25,
+  hero,grounded:true,hit:0
+ };
+}
+function pointer(e){
+ const r=canvas.getBoundingClientRect();
+ return {x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height};
+}
+canvas.addEventListener('pointerdown',e=>{
+ if(battle||ended)return;
+ drawing=true;current=[pointer(e)];
+ canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove',e=>{
+ if(!drawing)return;
+ const p=pointer(e);
+ const last=current[current.length-1];
+ if(Math.hypot(p.x-last.x,p.y-last.y)>3)current.push(p);
+ render();
+});
+canvas.addEventListener('pointerup',()=>{
+ if(!drawing)return;
+ drawing=false;
+ if(current.length>1)strokes.push(current);
+ current=[];render();
+});
+function stroke(points,color,width){
+ if(!points||points.length<2)return;
+ ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);
+ for(let i=1;i<points.length;i++)ctx.lineTo(points[i].x,points[i].y);
+ ctx.strokeStyle=color;ctx.lineWidth=width;
+ ctx.lineCap='round';ctx.lineJoin='round';ctx.stroke();
+}
+function background(){
+ let g=ctx.createLinearGradient(0,0,0,H);
+ g.addColorStop(0,'#91dff5');g.addColorStop(1,'#eafaff');
+ ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+ ctx.fillStyle='#ffffffaa';
+ for(const [x,y] of [[90,80],[380,65],[690,105]]){
+  ctx.beginPath();ctx.arc(x,y,20,0,7);
+  ctx.arc(x+24,y-7,25,0,7);ctx.arc(x+49,y,18,0,7);ctx.fill();
+ }
+ ctx.fillStyle='#c5a575';ctx.fillRect(0,GROUND,W,H-GROUND);
+ ctx.fillStyle='#7ab76d';ctx.fillRect(0,GROUND,W,12);
+ ctx.fillStyle='#ac8e62';
+ for(let x=0;x<W;x+=35)ctx.fillRect(x,GROUND+30,18,3);
+ // Arena edges
+ ctx.fillStyle='#6c7c94';
+ ctx.fillRect(0,GROUND,8,65);ctx.fillRect(W-8,GROUND,8,65);
+}
+function drawWheel(x,y,r,angle){
+ ctx.save();ctx.translate(x,y);ctx.rotate(angle);
+ ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);
+ ctx.fillStyle='#27364b';ctx.fill();
+ ctx.lineWidth=4;ctx.strokeStyle='#edf4fa';ctx.stroke();
+ ctx.beginPath();ctx.arc(0,0,r*.32,0,Math.PI*2);
+ ctx.fillStyle='#73d7bb';ctx.fill();
+ for(let i=0;i<6;i++){
+  ctx.rotate(Math.PI/3);
+  ctx.strokeStyle='#bdc9d8';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(r*.72,0);ctx.stroke();
+ }
+ ctx.restore();
+}
+function drawUnit(u){
+ ctx.save();ctx.translate(u.x,u.y);ctx.rotate(u.angle);
+ const hero=u.hero;
+ // Chassis: strokes become physical-looking structural beams.
+ const beams=hero?strokes:[];
+ if(beams.length){
+  for(const s of beams){
+   const local=s.map(p=>({x:(p.x-205)*.68,y:(p.y-(GROUND-48))*.68}));
+   stroke(local,hero?'#087e66':'#a93448',7);
+  }
+ }else{
+  ctx.fillStyle=hero?'#16a982':'#df536a';
+  ctx.fillRect(-40,-28,80,24);
+ }
+ // Wheels rotate as the machine moves.
+ const r=13+data.wheels*1.5;
+ drawWheel(-30,3,r,u.spin);
+ drawWheel(30,3,r,u.spin);
+ // Driver
+ ctx.beginPath();ctx.arc(0,-35,12,0,7);
+ ctx.fillStyle='#ffd4a2';ctx.fill();
+ ctx.fillStyle='#24344c';ctx.fillRect(-12,-40,24,6);
+ // Weapon
+ let len=hero?82:70;
+ if(hero)len+=data.damage*5;
+ ctx.lineWidth=hero?7:8;
+ ctx.strokeStyle=hero?'#087e66':'#a52c43';
+ ctx.beginPath();ctx.moveTo(hero?18:-18,-20);
+ ctx.lineTo(hero?len:-len,-32);ctx.stroke();
+ if(hero&&data.weapon==='hammer'){
+  ctx.fillStyle='#4c5b75';ctx.fillRect(len-6,-43,18,24);
+ }else if(hero&&data.weapon==='blade'){
+  ctx.fillStyle='#e9f6ff';ctx.beginPath();
+  ctx.moveTo(len,-32);ctx.lineTo(len-20,-46);
+  ctx.lineTo(len-13,-27);ctx.closePath();ctx.fill();
+ }else{
+  ctx.fillStyle='#e7f1ff';ctx.beginPath();
+  ctx.moveTo(hero?len:-len,-32);
+  ctx.lineTo(hero?len-17:-len+17,-23);
+  ctx.lineTo(hero?len-14:-len+14,-40);
+  ctx.closePath();ctx.fill();
+ }
+ ctx.restore();
+}
+function healthBar(x,y,u,color,label){
+ ctx.fillStyle='#26344c';ctx.fillRect(x,y,155,20);
+ ctx.fillStyle=color;ctx.fillRect(x,y,155*Math.max(0,u.hp/u.maxhp),20);
+ ctx.strokeStyle='#fff';ctx.strokeRect(x,y,155,20);
+ ctx.fillStyle='#142038';ctx.font='bold 11px sans-serif';
+ ctx.fillText(label,x+5,y+14);
+}
+function render(){
+ background();
+ if(battle||ended){
+  drawUnit(player);drawUnit(enemy);
+  healthBar(20,18,player,'#23c99a','ТЫ');
+  healthBar(625,18,enemy,'#f35f78','СОПЕРНИК');
+ }else{
+  // Draw a preview with the user's actual design.
+  ctx.save();ctx.globalAlpha=.6;
+  drawUnit(player);ctx.restore();
+  for(const s of strokes)stroke(s,'#087e66',7);
+  if(drawing)stroke(current,'#087e66',7);
+  ctx.fillStyle='#1b324b';ctx.font='13px sans-serif';
+  ctx.fillText('ЗОНА РИСОВАНИЯ',145,GROUND+65);
+ }
+}
+function startFight(){
+ if(battle)return;
+ battle=true;ended=false;
+ player=makeUnit(205,GROUND-48,true);
+ enemy=makeUnit(610,GROUND-48,false);
+ enemy.maxhp=100+data.level*12;
+ enemy.hp=enemy.maxhp;
+ enemy.vx=-.6-data.level*.04;
+ $('drive').style.display='flex';
+ $('status').textContent='Вперёд! Удерживай кнопки движения.';
+ render();
+}
+function finish(win){
+ if(ended)return;
+ ended=true;battle=false;
+ $('drive').style.display='none';
+ if(win){
+  const reward=10+data.level*5;
+  data.coins+=reward;data.level++;
+  $('status').textContent='🏆 Победа! Получено '+reward+' монет. Следующий уровень сложнее.';
+  save();
+ }else{
+  $('status').textContent='💥 Поражение! Улучши машину и попробуй снова.';
+ }
+ render();
+}
+function update(dt){
+ if(battle&&!ended){
+  const step=Math.min(dt,32)/16.67;
+  const accel=(.16+data.engine*.055)*step;
+  if(keys.left)player.vx-=accel;
+  if(keys.right)player.vx+=accel;
+  player.vx*=Math.pow(.987,step);
+  player.vx=Math.max(-4-data.engine*.4,Math.min(4+data.engine*.4,player.vx));
+  enemy.vx+=(player.x<enemy.x?-.025:.025)*step;
+  enemy.vx*=Math.pow(.995,step);
+  enemy.vx=Math.max(-2.8,Math.min(2.8,enemy.vx));
+  player.x+=player.vx*step;
+  enemy.x+=enemy.vx*step;
+  player.spin+=player.vx*.09*step;
+  enemy.spin+=enemy.vx*.09*step;
+  // Simple suspension and gravity.
+  for(const u of [player,enemy]){
+   u.vy+=.23*step;
+   u.y+=u.vy*step;
+   if(u.y>=GROUND-48){u.y=GROUND-48;u.vy=0;u.grounded=true}
+   else u.grounded=false;
+   u.angle+=(u.spin*.0008);
+   u.angle=Math.max(-.65,Math.min(.65,u.angle));
+  }
+  // Impacts damage both machines; weapon choice changes damage.
+  const distance=Math.abs(player.x-enemy.x);
+  if(distance<112&&player.hit<=0){
+   const weaponBonus=data.weapon==='hammer'?1.65:data.weapon==='blade'?1.3:1;
+   const damage=(3+Math.abs(player.vx)*1.7+data.damage*1.5)*weaponBonus;
+   enemy.hp-=damage;
+   player.hp-=Math.max(1,2-data.armor*.15);
+   player.hit=15;
+   enemy.vx+=enemy.x>player.x?1.3:-1.3;
+   enemy.vy=-2;
+  }
+  player.hit=Math.max(0,player.hit-step);
+  // Enemy charges and occasionally bounces away.
+  if(distance>115)enemy.vx+=(player.x>enemy.x?.025:-.025)*step;
+  if(player.x<35||player.x>765||player.y>GROUND+25)finish(false);
+  else if(enemy.x<30||enemy.x>770||enemy.y>GROUND+25||enemy.hp<=0)finish(true);
+  else if(player.hp<=0)finish(false);
+ }
+ render();
+}
+function loop(t){
+ const dt=last?Math.min(t-last,40):16.67;last=t;
+ update(dt);requestAnimationFrame(loop);
+}
+$('clear').onclick=()=>{
+ if(battle)return;
+ strokes=[];render();
+};
+$('fight').onclick=startFight;
+$('reset').onclick=newMachine;
+$('weapon').onchange=e=>{data.weapon=e.target.value;save();render()};
+document.querySelectorAll('[data-upgrade]').forEach(btn=>{
+ btn.onclick=()=>{
+  if(battle){$('status').textContent='Закончи бой перед улучшением.';return}
+  const k=btn.dataset.upgrade;
+  const base={engine:15,armor:20,damage:25,wheels:20}[k];
+  const cost=base*(data[k]+1);
+  if(data.coins<cost){
+   $('status').textContent='Недостаточно монет! Побеждай, чтобы заработать.';
+   return;
+  }
+  data.coins-=cost;data[k]++;
+  save();
+  $('status').textContent='Улучшение куплено!';
+  render();
+ };
+});
+function hold(id,key){
+ const el=$(id);
+ el.addEventListener('pointerdown',e=>{e.preventDefault();keys[key]=true});
+ for(const ev of ['pointerup','pointercancel','pointerleave'])
+  el.addEventListener(ev,()=>keys[key]=false);
+}
+hold('left','left');hold('right','right');
+window.addEventListener('keydown',e=>{
+ if(['ArrowLeft','ArrowRight','a','d','A','D'].includes(e.key))e.preventDefault();
+ if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a')keys.left=true;
+ if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')keys.right=true;
+});
+window.addEventListener('keyup',e=>{
+ if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a')keys.left=false;
+ if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')keys.right=false;
+});
+window.addEventListener('blur',()=>{keys.left=false;keys.right=false});
+updateUI();newMachine();requestAnimationFrame(loop);
+</script>
+</body>
+  </html>
